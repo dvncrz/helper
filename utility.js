@@ -1,28 +1,30 @@
-
-// waitForElement.js
 (function (global) {
   function waitForElement(selector, callback) {
-    const el = document.querySelector(selector);
-    if (el) {
-      callback(el);
-      return;
-    }
-
-    const observer = new MutationObserver(() => {
+    function start() {
       const el = document.querySelector(selector);
       if (el) {
         callback(el);
-        observer.disconnect();
+        return;
       }
-    });
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
+      const observer = new MutationObserver(() => {
+        const el = document.querySelector(selector);
+        if (el) {
+          callback(el);
+          observer.disconnect();
+        }
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    if (document.body) {
+      start();
+    } else {
+      window.addEventListener("DOMContentLoaded", start);
+    }
   }
 
-  // Export for browser or Node
   if (typeof module !== "undefined" && module.exports) {
     module.exports = waitForElement;
   } else {
