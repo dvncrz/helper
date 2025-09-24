@@ -1,18 +1,21 @@
 (function (global) {
-  function waitForElement(selector, callback, options = {}) {
+  const Helper = {};
+
+  /**
+   * Wait for a DOM element to appear
+   */
+  Helper.waitForElement = function (selector, callback, options = {}) {
     const once = options.once !== false; // default true
 
     function start(root) {
-      if (!root) return; // safety check
+      if (!root) return;
 
-      // Run immediately if element already exists
       const el = root.querySelector(selector);
       if (el) {
         callback(el);
         if (once) return;
       }
 
-      // Start observing
       const observer = new MutationObserver(() => {
         const el = root.querySelector(selector);
         if (el) {
@@ -25,12 +28,10 @@
     }
 
     function init() {
-      // Try #root, otherwise fall back to body
       let root = document.getElementById("root") || document.body;
       if (root) {
         start(root);
       } else {
-        // If neither exists yet, wait until body is created
         const bodyObserver = new MutationObserver(() => {
           const body = document.body;
           if (body) {
@@ -48,12 +49,20 @@
     } else {
       init();
     }
-  }
+  };
+
+  /**
+   * Example placeholder for a future helper function
+   * (you can add as many as you want here)
+   */
+  Helper.log = function (message) {
+    console.log("[Helper]", message);
+  };
 
   // Export
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = waitForElement;
+    module.exports = Helper;
   } else {
-    global.waitForElement = waitForElement;
+    global.Helper = Helper;
   }
 })(this);
