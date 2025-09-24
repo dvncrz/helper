@@ -1,21 +1,29 @@
 (function (global) {
+  "use strict";
+
+  // Namespace for your helpers
   const Helper = {};
 
   /**
-   * Wait for a DOM element to appear
+   * Wait for an element to appear in the DOM
+   * @param {string} selector - CSS selector of the element
+   * @param {Function} callback - Function to run once element exists
+   * @param {Object} options - { once: true|false } default true
    */
   Helper.waitForElement = function (selector, callback, options = {}) {
-    const once = options.once !== false; // default true
+    const once = options.once !== false; // default: true
 
     function start(root) {
       if (!root) return;
 
+      // Run immediately if element already exists
       const el = root.querySelector(selector);
       if (el) {
         callback(el);
         if (once) return;
       }
 
+      // Observe for changes
       const observer = new MutationObserver(() => {
         const el = root.querySelector(selector);
         if (el) {
@@ -28,10 +36,12 @@
     }
 
     function init() {
+      // Prefer #root, otherwise fallback to body
       let root = document.getElementById("root") || document.body;
       if (root) {
         start(root);
       } else {
+        // If body not ready, wait for it
         const bodyObserver = new MutationObserver(() => {
           const body = document.body;
           if (body) {
@@ -51,18 +61,16 @@
     }
   };
 
-  /**
-   * Example placeholder for a future helper function
-   * (you can add as many as you want here)
-   */
-  Helper.log = function (message) {
-    console.log("[Helper]", message);
+  // Example extra utility
+  Helper.replaceSubmenuText = function (oldText, newText) {
+    Helper.waitForElement(".submenu-text", (submenu) => {
+      if (submenu.textContent.includes(oldText)) {
+        submenu.textContent = submenu.textContent.replace(oldText, newText);
+      }
+    });
   };
 
-  // Export
-  if (typeof module !== "undefined" && module.exports) {
-    module.exports = Helper;
-  } else {
-    global.Helper = Helper;
-  }
-})(this);
+  // Expose Helper globally
+  global.Helper = Helper;
+
+})(window);
