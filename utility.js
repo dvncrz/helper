@@ -1,51 +1,28 @@
 (function (global) {
-  function waitForElement(selector, callback) {
-    function startObserving(root) {
-      // Check if element is already there
+  function waitForElement(selector, callback, options = {}) {
+    const root = document.getElementById("root") || document.body;
+    const once = options.once !== false; // default true
+
+    const observer = new MutationObserver(() => {
       const el = root.querySelector(selector);
       if (el) {
         callback(el);
-        return;
+
+        // Only disconnect if "once" is true
+        if (once) observer.disconnect();
       }
+    });
 
-      // Otherwise, wait for React to render it
-      const observer = new MutationObserver(() => {
-        const el = root.querySelector(selector);
-        if (el) {
-          callback(el);
-          observer.disconnect();
-        }
-      });
+    observer.observe(root, { childList: true, subtree: true });
 
-      observer.observe(root, { childList: true, subtree: true });
-    }
-
-    // Ensure we have the React root
-    function init() {
-      const root = document.getElementById("root"); // adjust if different
-      if (root) {
-        startObserving(root);
-      } else {
-        // If root itself hasn’t been created yet, retry
-        const bodyObserver = new MutationObserver(() => {
-          const root = document.getElementById("root");
-          if (root) {
-            startObserving(root);
-            bodyObserver.disconnect();
-          }
-        });
-        bodyObserver.observe(document.body, { childList: true });
-      }
-    }
-
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", init);
-    } else {
-      init();
+    // In case it's already in DOM before observer starts
+    const el = root.querySelector(selector);
+    if (el) {
+      callback(el);
+      if (once) observer.disconnect();
     }
   }
 
-  // Export
   if (typeof module !== "undefined" && module.exports) {
     module.exports = waitForElement;
   } else {
