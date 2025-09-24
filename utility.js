@@ -10,8 +10,8 @@
    * @param {Function} callback - Function to run once element exists
    * @param {Object} options - { once: true|false } default true
    */
-  Helper.waitForElement = function (selector, callback, options = {}) {
-    const once = options.once !== false; // default: true
+  Helper.waitForElement = function (selector, callback, options = { once: false }) {
+    const once = options.once
 
     function start(root) {
       if (!root) return;
