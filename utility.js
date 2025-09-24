@@ -70,6 +70,16 @@
     });
   };
 
+  /**
+   * Detect if the current device is mobile
+   * @returns {boolean}
+   */
+  Helper.isMobile = function () {
+    return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|Opera Mini|IEMobile/i.test(
+      navigator.userAgent
+    );
+  };
+
   // Expose Helper globally
   global.Helper = Helper;
 
