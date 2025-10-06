@@ -12,107 +12,127 @@
    */
   // Replace only the Helper.waitForElement implementation with this
   Helper.waitForElement = function (selector, callback, options = {}) {
-  const { once = false, stable = false, debounce = 100, stableChecks = 2 } = options;
+  const { once = false, stable = false, debounce = 100 } = options;
 
-  const timers = new WeakMap();           // el -> { timerId, lastValue, consecutive }
-  const elementObservers = new WeakMap(); // el -> MutationObserver
+  // Per-element state
+  // state = { timerId, lastSeenValue, mutationCount }
+  const states = new WeakMap();
 
-  function observeElementForStability(el) {
-    if (elementObservers.has(el)) return;
+  // Per-element mutation counter increments on every mutation observed
+  const mutationCounts = new WeakMap();
 
-    const obs = new MutationObserver(() => {
-      scheduleStableCheck(el);
-    });
-
-    obs.observe(el, { childList: true, subtree: true, characterData: true, attributes: true });
-    elementObservers.set(el, obs);
+  function ensureMutationCount(el) {
+    if (!mutationCounts.has(el)) mutationCounts.set(el, 0);
   }
 
-  function scheduleStableCheck(el) {
-    // read current snapshot immediately
-    const current = el.textContent;
+  function onMutationForEl(el) {
+    ensureMutationCount(el);
+    mutationCounts.set(el, mutationCounts.get(el) + 1);
+  }
 
-    // clear previous timer
-    const entry = timers.get(el);
-    if (entry && entry.timerId) clearTimeout(entry.timerId);
+  function scheduleCheck(el) {
+    // clear existing timer
+    const st = states.get(el);
+    if (st && st.timerId) {
+      clearTimeout(st.timerId);
+    }
 
-    // start a new timer; on fire, validate content hasn't changed since last check
+    // snapshot current value and mutation count
+    ensureMutationCount(el);
+    const snapshotValue = el.textContent;
+    const snapshotMutCount = mutationCounts.get(el);
+
     const timerId = setTimeout(() => {
-      // When timer fires, read the latest textContent
-      const latest = el.textContent;
+      // when timer fires, read current state
+      const currentValue = el.textContent;
+      const currentMutCount = mutationCounts.get(el) || 0;
 
-      // If we don't have an entry yet, create one
-      let e = timers.get(el);
-      if (!e) {
-        e = { lastValue: latest, consecutive: 1, timerId: null };
-      } else {
-        // If the latest equals the previous saved value, increment consecutive, otherwise reset
-        if (latest === e.lastValue) {
-          e.consecutive = (e.consecutive || 0) + 1;
-        } else {
-          e.lastValue = latest;
-          e.consecutive = 1;
-        }
-      }
-
-      timers.set(el, e);
-
-      if (e.consecutive >= stableChecks) {
-        // stable: call callback with latest DOM state
+      if (currentValue === snapshotValue && currentMutCount === snapshotMutCount) {
+        // stable: call callback
         try {
           callback(el);
         } catch (err) {
           console.error('waitForElement callback error', err);
         }
 
-        // cleanup if once is requested
-        if (once && elementObservers.has(el)) {
-          try { elementObservers.get(el).disconnect(); } catch (_) {}
-          elementObservers.delete(el);
+        // cleanup if once requested
+        if (once) {
+          // clear timer entry and leave mutationCounts (weakmap will GC)
+          states.delete(el);
+        } else {
+          // keep state but clear timerId
+          const existing = states.get(el) || {};
+          existing.timerId = null;
+          states.set(el, existing);
         }
-        // remove timers entry (we already called)
-        timers.delete(el);
       } else {
-        // not stable enough yet: schedule another check after debounce ms
-        const nextId = setTimeout(() => scheduleStableCheck(el), debounce);
-        e.timerId = nextId;
-        timers.set(el, e);
+        // not stable yet -> reschedule another check
+        // update lastSeenValue to current (optional)
+        states.set(el, { timerId: null, lastSeenValue: currentValue });
+        scheduleCheck(el);
       }
     }, debounce);
 
-    // save timer and lastValue snapshot (use current read)
-    timers.set(el, { timerId, lastValue: current, consecutive: 0 });
+    states.set(el, { timerId, lastSeenValue: snapshotValue, mutationCount: snapshotMutCount });
+  }
+
+  function observeElement(el) {
+    // If already observing, nothing to do
+    if (states.has(el) && states.get(el).observing) return;
+
+    // Create a MutationObserver for this element to detect changes and bump mutation count
+    const obs = new MutationObserver((mutations) => {
+      // increment per-element mutation counter for each callback
+      onMutationForEl(el);
+      // schedule a stability check
+      scheduleCheck(el);
+    });
+
+    obs.observe(el, { childList: true, subtree: true, characterData: true, attributes: true });
+
+    // attach observer reference so we can disconnect if needed
+    const st = states.get(el) || {};
+    st.observer = obs;
+    st.observing = true;
+    states.set(el, st);
   }
 
   function start(root) {
     if (!root) return;
 
+    // If element already present
     const el = root.querySelector(selector);
     if (el) {
       if (stable) {
-        observeElementForStability(el);
-        scheduleStableCheck(el);
+        ensureMutationCount(el);
+        observeElement(el);
+        scheduleCheck(el);
       } else {
-        callback(el);
+        // immediate call with current content
+        try { callback(el); } catch (e) { console.error(e); }
         if (once) return;
-        observeElementForStability(el);
+        // still observe for future changes if not once
+        ensureMutationCount(el);
+        observeElement(el);
       }
     }
 
-    // watch for future additions
-    const observer = new MutationObserver(() => {
+    // Observe root for element additions (lightweight)
+    const observer = new MutationObserver((mutations) => {
       const found = root.querySelector(selector);
       if (found) {
         if (stable) {
-          observeElementForStability(found);
-          scheduleStableCheck(found);
+          ensureMutationCount(found);
+          observeElement(found);
+          scheduleCheck(found);
         } else {
-          callback(found);
+          try { callback(found); } catch (e) { console.error(e); }
           if (once) {
             observer.disconnect();
             return;
           }
-          observeElementForStability(found);
+          ensureMutationCount(found);
+          observeElement(found);
         }
       }
     });
@@ -121,7 +141,7 @@
   }
 
   function init() {
-    const root = document.getElementById("root") || document.body;
+    let root = document.getElementById("root") || document.body;
     if (root) start(root);
     else {
       const bodyObserver = new MutationObserver(() => {
@@ -142,6 +162,7 @@
     init();
   }
 };
+
 
 
   // Example extra utility
