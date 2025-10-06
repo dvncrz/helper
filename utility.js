@@ -12,116 +12,137 @@
    */
   // Replace only the Helper.waitForElement implementation with this
   Helper.waitForElement = function (selector, callback, options = {}) {
-    const { once = false, stable = false, debounce = 100 } = options;
-  
-    // Map to store per-element debounce timers and observers
-    const timers = new WeakMap();
-    const elementObservers = new WeakMap();
-  
-    function observeElementForStability(el) {
-      // If already observing, keep it
-      if (elementObservers.has(el)) return;
-  
-      const obs = new MutationObserver((mutations) => {
-        // When anything changes, (re)start debounce timer
-        scheduleStableCallback(el);
-      });
-  
-      // Observe subtree and characterData so changes inside elements are caught
-      obs.observe(el, { childList: true, subtree: true, characterData: true, attributes: true });
-  
-      elementObservers.set(el, obs);
-    }
-  
-    function scheduleStableCallback(el) {
-      // clear previous timer if present
-      const prev = timers.get(el);
-      if (prev) clearTimeout(prev);
-  
-      const id = setTimeout(() => {
-        timers.delete(el);
-        // Call the callback with the latest content
+  const { once = false, stable = false, debounce = 100, stableChecks = 2 } = options;
+
+  const timers = new WeakMap();           // el -> { timerId, lastValue, consecutive }
+  const elementObservers = new WeakMap(); // el -> MutationObserver
+
+  function observeElementForStability(el) {
+    if (elementObservers.has(el)) return;
+
+    const obs = new MutationObserver(() => {
+      scheduleStableCheck(el);
+    });
+
+    obs.observe(el, { childList: true, subtree: true, characterData: true, attributes: true });
+    elementObservers.set(el, obs);
+  }
+
+  function scheduleStableCheck(el) {
+    // read current snapshot immediately
+    const current = el.textContent;
+
+    // clear previous timer
+    const entry = timers.get(el);
+    if (entry && entry.timerId) clearTimeout(entry.timerId);
+
+    // start a new timer; on fire, validate content hasn't changed since last check
+    const timerId = setTimeout(() => {
+      // When timer fires, read the latest textContent
+      const latest = el.textContent;
+
+      // If we don't have an entry yet, create one
+      let e = timers.get(el);
+      if (!e) {
+        e = { lastValue: latest, consecutive: 1, timerId: null };
+      } else {
+        // If the latest equals the previous saved value, increment consecutive, otherwise reset
+        if (latest === e.lastValue) {
+          e.consecutive = (e.consecutive || 0) + 1;
+        } else {
+          e.lastValue = latest;
+          e.consecutive = 1;
+        }
+      }
+
+      timers.set(el, e);
+
+      if (e.consecutive >= stableChecks) {
+        // stable: call callback with latest DOM state
         try {
           callback(el);
-        } catch (e) {
-          console.error('waitForElement callback error', e);
+        } catch (err) {
+          console.error('waitForElement callback error', err);
         }
-  
-        // If once is true, disconnect observer for this element
+
+        // cleanup if once is requested
         if (once && elementObservers.has(el)) {
-          try { elementObservers.get(el).disconnect(); } catch (e) {}
+          try { elementObservers.get(el).disconnect(); } catch (_) {}
           elementObservers.delete(el);
         }
-      }, debounce);
-  
-      timers.set(el, id);
+        // remove timers entry (we already called)
+        timers.delete(el);
+      } else {
+        // not stable enough yet: schedule another check after debounce ms
+        const nextId = setTimeout(() => scheduleStableCheck(el), debounce);
+        e.timerId = nextId;
+        timers.set(el, e);
+      }
+    }, debounce);
+
+    // save timer and lastValue snapshot (use current read)
+    timers.set(el, { timerId, lastValue: current, consecutive: 0 });
+  }
+
+  function start(root) {
+    if (!root) return;
+
+    const el = root.querySelector(selector);
+    if (el) {
+      if (stable) {
+        observeElementForStability(el);
+        scheduleStableCheck(el);
+      } else {
+        callback(el);
+        if (once) return;
+        observeElementForStability(el);
+      }
     }
-  
-    function start(root) {
-      if (!root) return;
-  
-      // If element already present
-      const el = root.querySelector(selector);
-      if (el) {
-        // If stable requested, observe changes on the element and schedule a stable callback
+
+    // watch for future additions
+    const observer = new MutationObserver(() => {
+      const found = root.querySelector(selector);
+      if (found) {
         if (stable) {
-          observeElementForStability(el);
-          scheduleStableCallback(el);
+          observeElementForStability(found);
+          scheduleStableCheck(found);
         } else {
-          // immediate call
-          callback(el);
-          if (once) return;
-          // still start observing for future occurrences (non-once)
-          observeElementForStability(el);
+          callback(found);
+          if (once) {
+            observer.disconnect();
+            return;
+          }
+          observeElementForStability(found);
         }
       }
-  
-      // Observe root for element additions
-      const observer = new MutationObserver((mutations) => {
-        // If element appears, handle it
-        const found = root.querySelector(selector);
-        if (found) {
-          if (stable) {
-            observeElementForStability(found);
-            scheduleStableCallback(found);
-          } else {
-            callback(found);
-            if (once) {
-              observer.disconnect();
-              return;
-            }
-            observeElementForStability(found);
-          }
+    });
+
+    observer.observe(root, { childList: true, subtree: true });
+  }
+
+  function init() {
+    const root = document.getElementById("root") || document.body;
+    if (root) start(root);
+    else {
+      const bodyObserver = new MutationObserver(() => {
+        const body = document.body;
+        if (body) {
+          const root = document.getElementById("root") || body;
+          start(root);
+          bodyObserver.disconnect();
         }
       });
-  
-      observer.observe(root, { childList: true, subtree: true });
+      bodyObserver.observe(document.documentElement, { childList: true });
     }
-  
-    function init() {
-      let root = document.getElementById("root") || document.body;
-      if (root) {
-        start(root);
-      } else {
-        // wait for body if it's not ready yet
-        const bodyObserver = new MutationObserver(() => {
-          const body = document.body;
-          if (body) {
-            const root = document.getElementById("root") || body;
-            start(root);
-            bodyObserver.disconnect();
-          }
-        });
-        bodyObserver.observe(document.documentElement, { childList: true });
-      }
-    }
-  
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", init);
-    } else {
-      init();
-    }
-  };
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+};
+
 
   // Example extra utility
   Helper.replaceSubmenuText = function (oldText, newText) {
