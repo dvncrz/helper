@@ -15,17 +15,20 @@
   const { once = false, stable = false, debounce = 100 } = options;
 
   // Per-element state
-  // state = { timerId, lastSeenValue, mutationCount }
+  // state = { timerId, lastSeenValue, mutationCount, observer }
   const states = new WeakMap();
 
-  // Per-element mutation counter increments on every mutation observed
+  // Per-element mutation counter
   const mutationCounts = new WeakMap();
+
+  // Keep last value we processed so we don't call the callback repeatedly with same data
+  const lastProcessed = new WeakMap();
 
   function ensureMutationCount(el) {
     if (!mutationCounts.has(el)) mutationCounts.set(el, 0);
   }
 
-  function onMutationForEl(el) {
+  function incMutationCount(el) {
     ensureMutationCount(el);
     mutationCounts.set(el, mutationCounts.get(el) + 1);
   }
@@ -33,9 +36,7 @@
   function scheduleCheck(el) {
     // clear existing timer
     const st = states.get(el);
-    if (st && st.timerId) {
-      clearTimeout(st.timerId);
-    }
+    if (st && st.timerId) clearTimeout(st.timerId);
 
     // snapshot current value and mutation count
     ensureMutationCount(el);
@@ -43,64 +44,74 @@
     const snapshotMutCount = mutationCounts.get(el);
 
     const timerId = setTimeout(() => {
-      // when timer fires, read current state
       const currentValue = el.textContent;
       const currentMutCount = mutationCounts.get(el) || 0;
 
       if (currentValue === snapshotValue && currentMutCount === snapshotMutCount) {
+        // Avoid calling callback repeatedly for the same processed value
+        if (lastProcessed.get(el) === currentValue) {
+          // cleanup timer entry
+          const existing = states.get(el) || {};
+          existing.timerId = null;
+          states.set(el, existing);
+          return;
+        }
+
         // stable: call callback
         try {
           callback(el);
         } catch (err) {
           console.error('waitForElement callback error', err);
         }
+        lastProcessed.set(el, currentValue);
 
-        // cleanup if once requested
+        // cleanup if once requested: disconnect observer for this element
         if (once) {
-          // clear timer entry and leave mutationCounts (weakmap will GC)
+          const s = states.get(el);
+          if (s && s.observer) {
+            try { s.observer.disconnect(); } catch (_) {}
+          }
           states.delete(el);
+          mutationCounts.delete(el);
+          return;
         } else {
-          // keep state but clear timerId
+          // clear timerId but keep observer
           const existing = states.get(el) || {};
           existing.timerId = null;
           states.set(el, existing);
         }
       } else {
         // not stable yet -> reschedule another check
-        // update lastSeenValue to current (optional)
-        states.set(el, { timerId: null, lastSeenValue: currentValue });
+        states.set(el, { timerId: null, lastSeenValue: currentValue, observer: st?.observer });
         scheduleCheck(el);
       }
     }, debounce);
 
-    states.set(el, { timerId, lastSeenValue: snapshotValue, mutationCount: snapshotMutCount });
+    states.set(el, { timerId, lastSeenValue: snapshotValue, mutationCount: snapshotMutCount, observer: st?.observer });
   }
 
   function observeElement(el) {
-    // If already observing, nothing to do
-    if (states.has(el) && states.get(el).observing) return;
+    // If already observing, do nothing
+    const s = states.get(el);
+    if (s && s.observer) return;
 
-    // Create a MutationObserver for this element to detect changes and bump mutation count
     const obs = new MutationObserver((mutations) => {
-      // increment per-element mutation counter for each callback
-      onMutationForEl(el);
-      // schedule a stability check
+      // increment per-element mutation counter and schedule a check
+      incMutationCount(el);
       scheduleCheck(el);
     });
 
     obs.observe(el, { childList: true, subtree: true, characterData: true, attributes: true });
 
-    // attach observer reference so we can disconnect if needed
-    const st = states.get(el) || {};
-    st.observer = obs;
-    st.observing = true;
-    states.set(el, st);
+    const cur = states.get(el) || {};
+    cur.observer = obs;
+    cur.observing = true;
+    states.set(el, cur);
   }
 
   function start(root) {
     if (!root) return;
 
-    // If element already present
     const el = root.querySelector(selector);
     if (el) {
       if (stable) {
@@ -111,7 +122,6 @@
         // immediate call with current content
         try { callback(el); } catch (e) { console.error(e); }
         if (once) return;
-        // still observe for future changes if not once
         ensureMutationCount(el);
         observeElement(el);
       }
@@ -162,8 +172,6 @@
     init();
   }
 };
-
-
 
   // Example extra utility
   Helper.replaceSubmenuText = function (oldText, newText) {
