@@ -223,10 +223,7 @@ Helper.getDuration = async function (sessionId) {
 
     const data = await res.json();
 
-    // getLangID may be defined elsewhere; guard for it
-    const langId = (typeof window.getLangID === "function") ? window.getLangID() : null;
-    const langDur = langId ? (data[langId]?.duration_ms) : undefined;
-    const durationMs = langDur ?? data.duration_ms ?? null;
+    const durationMs = data[getLangID()]?.duration_ms;
 
     if (durationMs == null) return null;
     return Helper.msToHMS(durationMs);
